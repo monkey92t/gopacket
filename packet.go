@@ -17,6 +17,7 @@ import (
 	"reflect"
 	"runtime/debug"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 )
@@ -205,9 +206,10 @@ func (p *packet) recoverDecodeError() {
 // in a single line, with no trailing newline.  This function is specifically
 // designed to do the right thing for most layers... it follows the following
 // rules:
-//  * If the Layer has a String function, just output that.
-//  * Otherwise, output all exported fields in the layer, recursing into
-//    exported slices and structs.
+//   - If the Layer has a String function, just output that.
+//   - Otherwise, output all exported fields in the layer, recursing into
+//     exported slices and structs.
+//
 // NOTE:  This is NOT THE SAME AS fmt's "%#v".  %#v will output both exported
 // and unexported fields... many times packet layers contain unexported stuff
 // that would just mess up the output of the layer, see for example the
@@ -247,11 +249,12 @@ func LayerDump(l Layer) string {
 // LayerString for more details.
 //
 // Params:
-//   i - value to write out
-//   anonymous:  if we're currently recursing an anonymous member of a struct
-//   writeSpace:  if we've already written a value in a struct, and need to
-//     write a space before writing more.  This happens when we write various
-//     anonymous values, and need to keep writing more.
+//
+//	i - value to write out
+//	anonymous:  if we're currently recursing an anonymous member of a struct
+//	writeSpace:  if we've already written a value in a struct, and need to
+//	  write a space before writing more.  This happens when we write various
+//	  anonymous values, and need to keep writing more.
 func layerString(v reflect.Value, anonymous bool, writeSpace bool) string {
 	// Let String() functions take precedence.
 	if v.CanInterface() {
@@ -695,7 +698,7 @@ type PacketDataSource interface {
 	//  ci:  Metadata about the capture
 	//  err:  An error encountered while reading packet data.  If err != nil,
 	//    then data/ci will be ignored.
-	ReadPacketData() (data []byte, ci CaptureInfo, err error)
+	ReadPacketData(buff *[]byte) (ci CaptureInfo, err error)
 }
 
 // ConcatFinitePacketDataSources returns a PacketDataSource that wraps a set
@@ -711,16 +714,16 @@ func ConcatFinitePacketDataSources(pds ...PacketDataSource) PacketDataSource {
 
 type concat []PacketDataSource
 
-func (c *concat) ReadPacketData() (data []byte, ci CaptureInfo, err error) {
+func (c *concat) ReadPacketData(buff *[]byte) (ci CaptureInfo, err error) {
 	for len(*c) > 0 {
-		data, ci, err = (*c)[0].ReadPacketData()
+		ci, err = (*c)[0].ReadPacketData(buff)
 		if err == io.EOF {
 			*c = (*c)[1:]
 			continue
 		}
 		return
 	}
-	return nil, CaptureInfo{}, io.EOF
+	return CaptureInfo{}, io.EOF
 }
 
 // ZeroCopyPacketDataSource is an interface to pull packet data from sources
@@ -748,18 +751,19 @@ type ZeroCopyPacketDataSource interface {
 // There are currently two different methods for reading packets in through
 // a PacketSource:
 //
-// Reading With Packets Function
+// # Reading With Packets Function
 //
 // This method is the most convenient and easiest to code, but lacks
 // flexibility.  Packets returns a 'chan Packet', then asynchronously writes
 // packets into that channel.  Packets uses a blocking channel, and closes
 // it if an io.EOF is returned by the underlying PacketDataSource.  All other
 // PacketDataSource errors are ignored and discarded.
-//  for packet := range packetSource.Packets() {
-//    ...
-//  }
 //
-// Reading With NextPacket Function
+//	for packet := range packetSource.Packets() {
+//	  ...
+//	}
+//
+// # Reading With NextPacket Function
 //
 // This method is the most flexible, and exposes errors that may be
 // encountered by the underlying PacketDataSource.  It's also the fastest
@@ -767,16 +771,17 @@ type ZeroCopyPacketDataSource interface {
 // read/write.  However, it requires the user to handle errors, most
 // importantly the io.EOF error in cases where packets are being read from
 // a file.
-//  for {
-//    packet, err := packetSource.NextPacket()
-//    if err == io.EOF {
-//      break
-//    } else if err != nil {
-//      log.Println("Error:", err)
-//      continue
-//    }
-//    handlePacket(packet)  // Do something with each packet.
-//  }
+//
+//	for {
+//	  packet, err := packetSource.NextPacket()
+//	  if err == io.EOF {
+//	    break
+//	  } else if err != nil {
+//	    log.Println("Error:", err)
+//	    continue
+//	  }
+//	  handlePacket(packet)  // Do something with each packet.
+//	}
 type PacketSource struct {
 	source  PacketDataSource
 	decoder Decoder
@@ -797,12 +802,12 @@ func NewPacketSource(source PacketDataSource, decoder Decoder) *PacketSource {
 
 // NextPacket returns the next decoded packet from the PacketSource.  On error,
 // it returns a nil packet and a non-nil error.
-func (p *PacketSource) NextPacket() (Packet, error) {
-	data, ci, err := p.source.ReadPacketData()
+func (p *PacketSource) NextPacket(buff *[]byte) (Packet, error) {
+	ci, err := p.source.ReadPacketData(buff)
 	if err != nil {
 		return nil, err
 	}
-	packet := NewPacket(data, p.decoder, p.DecodeOptions)
+	packet := NewPacket(*buff, p.decoder, p.DecodeOptions)
 	m := packet.Metadata()
 	m.CaptureInfo = ci
 	m.Truncated = m.Truncated || ci.CaptureLength < ci.Length
@@ -815,7 +820,8 @@ func (p *PacketSource) NextPacket() (Packet, error) {
 func (p *PacketSource) packetsToChannel() {
 	defer close(p.c)
 	for {
-		packet, err := p.NextPacket()
+		var buff []byte
+		packet, err := p.NextPacket(&buff)
 		if err == nil {
 			p.c <- packet
 			continue
@@ -850,9 +856,9 @@ func (p *PacketSource) packetsToChannel() {
 // PacketDataSource returns an io.EOF error, the channel will be closed.
 // If any other error is encountered, it is ignored.
 //
-//  for packet := range packetSource.Packets() {
-//    handlePacket(packet)  // Do something with each packet.
-//  }
+//	for packet := range packetSource.Packets() {
+//	  handlePacket(packet)  // Do something with each packet.
+//	}
 //
 // If called more than once, returns the same channel.
 func (p *PacketSource) Packets() chan Packet {
@@ -861,4 +867,55 @@ func (p *PacketSource) Packets() chan Packet {
 		go p.packetsToChannel()
 	}
 	return p.c
+}
+
+// ---------------------------------------------------------------------------------------------------------------------
+
+const maxDataLen = 1<<16 + 20
+
+// DataPool 读取数据包的缓存池
+var DataPool = sync.Pool{
+	New: func() any {
+		// 0：(0x01)标志位
+		// 1-2: little endian, 2字节，表示数据包长度
+		// 3-19: 保留位
+		// 20-end: 数据包
+		return make([]byte, maxDataLen)
+	},
+}
+
+// WithReadPacketSync 读取包，并调用指定函数，会自动处理缓存函数和错误
+// 注意：此函数可能存在阻塞，fn 函数中不可有任何指针依然指向 Packet 数据，
+// 如果需要依赖该数据，需要自行拷贝
+func (p *PacketSource) WithReadPacketSync(fn func(Packet)) {
+	data := DataPool.Get().([]byte)
+	for {
+		pk, err := p.NextPacket(&data)
+		if err == nil {
+			fn(pk)
+			DataPool.Put(data)
+			continue
+		}
+
+		// Immediately retry for temporary network errors
+		if nerr, ok := err.(net.Error); ok && nerr.Temporary() {
+			continue
+		}
+
+		// Immediately retry for EAGAIN
+		if err == syscall.EAGAIN {
+			continue
+		}
+
+		// Immediately break for known unrecoverable errors
+		if err == io.EOF || err == io.ErrUnexpectedEOF ||
+			err == io.ErrNoProgress || err == io.ErrClosedPipe || err == io.ErrShortBuffer ||
+			err == syscall.EBADF ||
+			strings.Contains(err.Error(), "use of closed file") {
+			break
+		}
+
+		// Sleep briefly and try again
+		time.Sleep(time.Millisecond * time.Duration(5))
+	}
 }

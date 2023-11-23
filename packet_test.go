@@ -30,7 +30,7 @@ func TestDumpEmbedded(t *testing.T) {
 
 type singlePacketSource [1][]byte
 
-func (s *singlePacketSource) ReadPacketData() ([]byte, CaptureInfo, error) {
+func (s *singlePacketSource) ReadPacketData(buff []byte) ([]byte, CaptureInfo, error) {
 	if (*s)[0] == nil {
 		return nil, CaptureInfo{}, io.EOF
 	}
@@ -44,19 +44,19 @@ func TestConcatPacketSources(t *testing.T) {
 	sourceB := &singlePacketSource{[]byte{2}}
 	sourceC := &singlePacketSource{[]byte{3}}
 	concat := ConcatFinitePacketDataSources(sourceA, sourceB, sourceC)
-	a, _, err := concat.ReadPacketData()
+	a, _, err := concat.ReadPacketData(nil)
 	if err != nil || len(a) != 1 || a[0] != 1 {
 		t.Errorf("expected [1], got %v/%v", a, err)
 	}
-	b, _, err := concat.ReadPacketData()
+	b, _, err := concat.ReadPacketData(nil)
 	if err != nil || len(b) != 1 || b[0] != 2 {
 		t.Errorf("expected [2], got %v/%v", b, err)
 	}
-	c, _, err := concat.ReadPacketData()
+	c, _, err := concat.ReadPacketData(nil)
 	if err != nil || len(c) != 1 || c[0] != 3 {
 		t.Errorf("expected [3], got %v/%v", c, err)
 	}
-	if _, _, err := concat.ReadPacketData(); err != io.EOF {
+	if _, _, err := concat.ReadPacketData(nil); err != io.EOF {
 		t.Errorf("expected io.EOF, got %v", err)
 	}
 }

@@ -247,12 +247,24 @@ const (
 // ReadPacketData returns the next packet read from the pcap handle, along with an error
 // code associated with that packet.  If the packet is read successfully, the
 // returned error is nil.
-func (p *Handle) ReadPacketData() (data []byte, ci gopacket.CaptureInfo, err error) {
+func (p *Handle) ReadPacketData(buff *[]byte) (ci gopacket.CaptureInfo, err error) {
 	p.mu.Lock()
 	err = p.getNextBufPtrLocked(&ci)
 	if err == nil {
-		data = make([]byte, ci.CaptureLength)
-		copy(data, (*(*[1 << 30]byte)(unsafe.Pointer(p.bufptr)))[:])
+		dataLen := ci.CaptureLength + 20
+		data := *buff
+		if cap(data) < dataLen {
+			data = make([]byte, dataLen)
+			*buff = data
+		} else {
+			data = data[:dataLen]
+		}
+		// 处理包头
+		data[0] = 0x01
+		data[1] = byte(ci.CaptureLength)
+		data[2] = byte(ci.CaptureLength >> 8)
+		// data[3-19] 保留
+		copy(data[20:], (*(*[1 << 30]byte)(unsafe.Pointer(p.bufptr)))[:])
 	}
 	p.mu.Unlock()
 	if err == NextErrorTimeoutExpired {
@@ -355,9 +367,10 @@ func (p *Handle) getNextBufPtrLocked(ci *gopacket.CaptureInfo) error {
 // to old bytes when using ZeroCopyReadPacketData... if you need to keep data past
 // the next time you call ZeroCopyReadPacketData, use ReadPacketData, which copies
 // the bytes into a new buffer for you.
-//  data1, _, _ := handle.ZeroCopyReadPacketData()
-//  // do everything you want with data1 here, copying bytes out of it if you'd like to keep them around.
-//  data2, _, _ := handle.ZeroCopyReadPacketData()  // invalidates bytes in data1
+//
+//	data1, _, _ := handle.ZeroCopyReadPacketData()
+//	// do everything you want with data1 here, copying bytes out of it if you'd like to keep them around.
+//	data2, _, _ := handle.ZeroCopyReadPacketData()  // invalidates bytes in data1
 func (p *Handle) ZeroCopyReadPacketData() (data []byte, ci gopacket.CaptureInfo, err error) {
 	p.mu.Lock()
 	err = p.getNextBufPtrLocked(&ci)
@@ -410,8 +423,7 @@ func (p *Handle) ListDataLinks() (datalinks []Datalink, err error) {
 // compileBPFFilter always returns an allocated C.struct_bpf_program
 // It is the callers responsibility to free the memory again, e.g.
 //
-//    C.pcap_freecode(&bpf)
-//
+//	C.pcap_freecode(&bpf)
 func (p *Handle) compileBPFFilter(expr string) (pcapBpfProgram, error) {
 	var maskp = uint32(pcapNetmaskUnknown)
 
@@ -465,23 +477,25 @@ func (p *Handle) SetBPFFilter(expr string) (err error) {
 // SetBPFInstructionFilter may be used to apply a filter in BPF asm byte code format.
 //
 // Simplest way to generate BPF asm byte code is with tcpdump:
-//     tcpdump -dd 'udp'
+//
+//	tcpdump -dd 'udp'
 //
 // The output may be used directly to add a filter, e.g.:
-//     bpfInstructions := []pcap.BpfInstruction{
-//			{0x28, 0, 0, 0x0000000c},
-//			{0x15, 0, 9, 0x00000800},
-//			{0x30, 0, 0, 0x00000017},
-//			{0x15, 0, 7, 0x00000006},
-//			{0x28, 0, 0, 0x00000014},
-//			{0x45, 5, 0, 0x00001fff},
-//			{0xb1, 0, 0, 0x0000000e},
-//			{0x50, 0, 0, 0x0000001b},
-//			{0x54, 0, 0, 0x00000012},
-//			{0x15, 0, 1, 0x00000012},
-//			{0x6, 0, 0, 0x0000ffff},
-//			{0x6, 0, 0, 0x00000000},
-//		}
+//
+//	    bpfInstructions := []pcap.BpfInstruction{
+//				{0x28, 0, 0, 0x0000000c},
+//				{0x15, 0, 9, 0x00000800},
+//				{0x30, 0, 0, 0x00000017},
+//				{0x15, 0, 7, 0x00000006},
+//				{0x28, 0, 0, 0x00000014},
+//				{0x45, 5, 0, 0x00001fff},
+//				{0xb1, 0, 0, 0x0000000e},
+//				{0x50, 0, 0, 0x0000001b},
+//				{0x54, 0, 0, 0x00000012},
+//				{0x15, 0, 1, 0x00000012},
+//				{0x6, 0, 0, 0x0000ffff},
+//				{0x6, 0, 0, 0x00000000},
+//			}
 //
 // An other posibility is to write the bpf code in bpf asm.
 // Documentation: https://www.kernel.org/doc/Documentation/networking/filter.txt
@@ -534,13 +548,13 @@ func (p *Handle) NewBPF(expr string) (*BPF, error) {
 // This allows to match packets obtained from a-non GoPacket capture source
 // to be matched.
 //
-// 	buf := make([]byte, MaxFrameSize)
-// 	bpfi, _ := pcap.NewBPF(layers.LinkTypeEthernet, MaxFrameSize, "icmp")
-// 	n, _ := someIO.Read(buf)
-// 	ci := gopacket.CaptureInfo{CaptureLength: n, Length: n}
-// 	if bpfi.Matches(ci, buf) {
-// 		doSomething()
-// 	}
+//	buf := make([]byte, MaxFrameSize)
+//	bpfi, _ := pcap.NewBPF(layers.LinkTypeEthernet, MaxFrameSize, "icmp")
+//	n, _ := someIO.Read(buf)
+//	ci := gopacket.CaptureInfo{CaptureLength: n, Length: n}
+//	if bpfi.Matches(ci, buf) {
+//		doSomething()
+//	}
 func NewBPF(linkType layers.LinkType, captureLength int, expr string) (*BPF, error) {
 	h, err := pcapOpenDead(linkType, captureLength)
 	if err != nil {
@@ -552,7 +566,7 @@ func NewBPF(linkType layers.LinkType, captureLength int, expr string) (*BPF, err
 
 // NewBPFInstructionFilter sets the given BPFInstructions as new filter program.
 //
-// More details see func SetBPFInstructionFilter
+// # More details see func SetBPFInstructionFilter
 //
 // BPF filters need to be created from activated handles, because they need to
 // know the underlying link type to correctly compile their offsets.
@@ -796,8 +810,9 @@ func (p *InactiveHandle) CleanUp() {
 
 // NewInactiveHandle creates a new InactiveHandle, which wraps an un-activated PCAP handle.
 // Callers of NewInactiveHandle should immediately defer 'CleanUp', as in:
-//   inactive := NewInactiveHandle("eth0")
-//   defer inactive.CleanUp()
+//
+//	inactive := NewInactiveHandle("eth0")
+//	defer inactive.CleanUp()
 func NewInactiveHandle(device string) (*InactiveHandle, error) {
 	// Try to get the interface index, but iy could be something like "any"
 	// in which case use 0, which doesn't exist in nature
