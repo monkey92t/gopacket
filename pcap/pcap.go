@@ -256,7 +256,6 @@ func (p *Handle) ReadPacketData(buff *[]byte) (ci gopacket.CaptureInfo, err erro
 		fmt.Printf("---------1, CaptureLength - %v, data len - %v, data cap - %v\n", ci.CaptureLength, len(data), cap(data))
 		if cap(data) < dataLen {
 			data = make([]byte, dataLen)
-			*buff = data
 		} else {
 			data = data[:dataLen]
 		}
@@ -266,6 +265,7 @@ func (p *Handle) ReadPacketData(buff *[]byte) (ci gopacket.CaptureInfo, err erro
 		data[2] = byte(ci.CaptureLength >> 8)
 		data[3] = '\n'
 		copy(data[20:], (*(*[1 << 30]byte)(unsafe.Pointer(p.bufptr)))[:])
+		*buff = data
 	}
 	p.mu.Unlock()
 	if err == NextErrorTimeoutExpired {
