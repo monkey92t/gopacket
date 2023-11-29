@@ -803,11 +803,14 @@ func NewPacketSource(source PacketDataSource, decoder Decoder) *PacketSource {
 // NextPacket returns the next decoded packet from the PacketSource.  On error,
 // it returns a nil packet and a non-nil error.
 func (p *PacketSource) NextPacket(buff *[]byte) (Packet, error) {
+	fmt.Printf("-----NextPacket-1, data len - %d, cap - %d\n", len(*buff), cap(*buff))
 	ci, err := p.source.ReadPacketData(buff)
 	if err != nil {
 		return nil, err
 	}
+	fmt.Printf("-----NextPacket-2, data len - %d, cap - %d\n", len(*buff), cap(*buff))
 	packet := NewPacket(*buff, p.decoder, p.DecodeOptions)
+	fmt.Printf("-----NextPacket-3, data len - %d, cap - %d\n", len(*buff), cap(*buff))
 	m := packet.Metadata()
 	m.CaptureInfo = ci
 	m.Truncated = m.Truncated || ci.CaptureLength < ci.Length
