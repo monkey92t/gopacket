@@ -17,7 +17,6 @@ import (
 	"reflect"
 	"runtime/debug"
 	"strings"
-	"sync"
 	"syscall"
 	"time"
 )
@@ -803,14 +802,11 @@ func NewPacketSource(source PacketDataSource, decoder Decoder) *PacketSource {
 // NextPacket returns the next decoded packet from the PacketSource.  On error,
 // it returns a nil packet and a non-nil error.
 func (p *PacketSource) NextPacket(buff *[]byte) (Packet, error) {
-	fmt.Printf("-----NextPacket-1, data len - %d, cap - %d\n", len(*buff), cap(*buff))
 	ci, err := p.source.ReadPacketData(buff)
 	if err != nil {
 		return nil, err
 	}
-	fmt.Printf("-----NextPacket-2, data len - %d, cap - %d\n", len(*buff), cap(*buff))
 	packet := NewPacket(*buff, p.decoder, p.DecodeOptions)
-	fmt.Printf("-----NextPacket-3, data len - %d, cap - %d\n", len(*buff), cap(*buff))
 	m := packet.Metadata()
 	m.CaptureInfo = ci
 	m.Truncated = m.Truncated || ci.CaptureLength < ci.Length
@@ -877,15 +873,15 @@ func (p *PacketSource) Packets() chan Packet {
 const maxDataLen = 1<<16 + 20
 
 // DataPool 读取数据包的缓存池
-var DataPool = sync.Pool{
-	New: func() any {
-		// 0：(0x01)标志位
-		// 1-2: little endian, 2字节，表示数据包长度
-		// 3-19: 保留位
-		// 20-end: 数据包
-		return make([]byte, maxDataLen)
-	},
-}
+//var DataPool = sync.Pool{
+//	New: func() any {
+//		// 0：(0x01)标志位
+//		// 1-2: little endian, 2字节，表示数据包长度
+//		// 3-19: 保留位
+//		// 20-end: 数据包
+//		return make([]byte, maxDataLen)
+//	},
+//}
 
 // WithReadPacketSync 读取包，并调用指定函数，会自动处理缓存函数和错误
 // 注意：此函数可能存在阻塞，fn 函数中不可有任何指针依然指向 Packet 数据，
