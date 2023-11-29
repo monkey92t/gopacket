@@ -888,12 +888,11 @@ var DataPool = sync.Pool{
 // 注意：此函数可能存在阻塞，fn 函数中不可有任何指针依然指向 Packet 数据，
 // 如果需要依赖该数据，需要自行拷贝
 func (p *PacketSource) WithReadPacketSync(fn func(Packet)) {
-	data := DataPool.Get().([]byte)
+	data := make([]byte, maxDataLen)
 	for {
 		pk, err := p.NextPacket(&data)
 		if err == nil {
 			fn(pk)
-			DataPool.Put(data)
 			continue
 		}
 
