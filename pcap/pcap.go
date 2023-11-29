@@ -263,7 +263,8 @@ func (p *Handle) ReadPacketData(buff *[]byte) (ci gopacket.CaptureInfo, err erro
 		data[0] = 0x01
 		data[1] = byte(ci.CaptureLength)
 		data[2] = byte(ci.CaptureLength >> 8)
-		// data[3-19] 保留
+		data[3] = '\n'
+		// data[4-19] 保留
 		copy(data[20:], (*(*[1 << 30]byte)(unsafe.Pointer(p.bufptr)))[:])
 	}
 	p.mu.Unlock()
