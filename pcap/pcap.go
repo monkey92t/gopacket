@@ -262,23 +262,42 @@ func (p *Handle) ReadPacketData() (data []byte, ci gopacket.CaptureInfo, err err
 	return
 }
 
-func (p *Handle) ReadPacketDataToBuff(buff *[]byte) (err error) {
+// HeaderSize header的长度，
+// |-------------------------------|
+// | 0  1  2  3  4  5  6  7  8  9  |
+// | 1 | size | \n  |   保留位     |
+// |------------------------------|
+const HeaderSize = 10
+
+// WithBuffReadPacketData 读取数据包写入到buff指针中，如果buff不足，会自动扩容，header表示是否在头部填充header
+func (p *Handle) WithBuffReadPacketData(buff *[]byte, header bool) (err error) {
+	var (
+		ci      gopacket.CaptureInfo
+		dataLen int
+		start   int
+	)
 	p.mu.Lock()
-	var ci gopacket.CaptureInfo
 	err = p.getNextBufPtrLocked(&ci)
 	if err == nil {
-		dataLen := ci.CaptureLength + 10
+		dataLen = ci.CaptureLength
+		if header {
+			start = HeaderSize
+			dataLen += HeaderSize
+		}
 		data := *buff
 		if cap(data) < dataLen {
 			data = make([]byte, dataLen)
 		} else {
 			data = data[:dataLen]
 		}
-		data[0] = 0x01
-		data[1] = byte(ci.CaptureLength)
-		data[2] = byte(ci.CaptureLength >> 8)
-		data[3] = '\n'
-		copy(data[10:], (*(*[1 << 30]byte)(unsafe.Pointer(p.bufptr)))[:])
+
+		if header {
+			data[0] = 0x01
+			data[1] = byte(ci.CaptureLength)
+			data[2] = byte(ci.CaptureLength >> 8)
+			data[3] = '\n'
+		}
+		copy(data[start:], (*(*[1 << 30]byte)(unsafe.Pointer(p.bufptr)))[:])
 		*buff = data
 	}
 	p.mu.Unlock()
@@ -288,14 +307,14 @@ func (p *Handle) ReadPacketDataToBuff(buff *[]byte) (err error) {
 	return
 }
 
-// SyncReadDataCall 读取包，并调用指定函数，会自动处理缓存函数和错误
+// SyncReadSyncCall 读取包，并调用指定函数，会自动处理缓存函数和错误，header表示是否使填充header
 // 注意：此函数可能存在阻塞，fn 函数中不可有任何指针依然指向 Packet 数据，
 // 如果需要依赖该数据，需要自行拷贝
-func (p *Handle) SyncReadDataCall(fn func([]byte)) {
+func (p *Handle) SyncReadSyncCall(header bool, fn func([]byte)) {
 	const maxDataLen = 1<<16 + 10
 	data := make([]byte, maxDataLen)
 	for {
-		err := p.ReadPacketDataToBuff(&data)
+		err := p.WithBuffReadPacketData(&data, header)
 		if err == nil {
 			fn(data)
 			continue
