@@ -307,11 +307,11 @@ func (p *Handle) WithBuffReadPacketData(buff *[]byte, header bool) (err error) {
 	return
 }
 
-// SyncReadSyncCall 读取包，并调用指定函数，会自动处理缓存函数和错误，header表示是否使填充header
+// SyncReadDataCall 读取包，并调用指定函数，会自动处理缓存函数和错误，header表示是否使填充header
 // 注意：此函数可能存在阻塞，fn 函数中不可有任何指针依然指向 Packet 数据，
 // 如果需要依赖该数据，需要自行拷贝
-func (p *Handle) SyncReadSyncCall(header bool, fn func([]byte)) {
-	const maxDataLen = 1<<16 + 10
+func (p *Handle) SyncReadDataCall(header bool, fn func([]byte)) {
+	const maxDataLen = 1<<16 + HeaderSize
 	data := make([]byte, maxDataLen)
 	for {
 		err := p.WithBuffReadPacketData(&data, header)
